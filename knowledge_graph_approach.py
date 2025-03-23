@@ -1,40 +1,46 @@
 import sqlite3
 import pandas as pd
-import networkx as nx
+from neo4j import GraphDatabase
 from pollinations import StructuredChat
 import json
 
 # Configuration
 DB_PATH = "my_database.db"
 TABLE_NAME = "sample_sales_data"
+NEO4J_URI = "bolt://localhost:7474"  # Default Neo4j URI
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "neo4j"  
+
+# JSON schema for Cypher query generation
+cypher_schema = {
+    "type": "object",
+    "properties": {
+        "cypher_query": {"type": "string"}
+    },
+    "required": ["cypher_query"]
+}
 
 # JSON schema for final response
 response_schema = {
     "type": "object",
     "properties": {
         "answer": {"type": "string"},
+        "cypher_query": {"type": "string"},
         "graph_data": {
             "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "entity": {"type": "string"},
-                    "relationship": {"type": "string"},
-                    "related_entity": {"type": "string"},
-                    "attributes": {"type": "object"}
-                }
-            }
+            "items": {"type": "object"}
         }
     },
-    "required": ["answer", "graph_data"]
+    "required": ["answer", "cypher_query", "graph_data"]
 }
 
-class KnowledgeGraphSystem:
-    def __init__(self, db_path, table_name):
+class Neo4jKnowledgeGraphSystem:
+    def __init__(self, db_path, table_name, neo4j_uri, neo4j_user, neo4j_password):
         self.db_path = db_path
         self.table_name = table_name
-        self.graph = nx.DiGraph()  # Directed graph for relationships
-        self.chat = StructuredChat(json_schema=response_schema)
+        self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        self.cypher_chat = StructuredChat(json_schema=cypher_schema)
+        self.response_chat = StructuredChat(json_schema=response_schema)
         
         # Initialize knowledge graph
         self._build_knowledge_graph()
@@ -48,81 +54,107 @@ class KnowledgeGraphSystem:
         return df
 
     def _build_knowledge_graph(self):
-        """Build a knowledge graph from table data."""
+        """Build a knowledge graph in Neo4j from table data."""
         df = self._fetch_table_data()
         
-        for _, row in df.iterrows():
-            order_id = row["Order_ID"]
-            product = row["Product"]
-            region = row["Region"]
+        with self.driver.session() as session:
+            # Clear existing graph (for fresh start)
+            session.run("MATCH (n) DETACH DELETE n")
             
-            # Add nodes
-            self.graph.add_node(order_id, type="Order", attributes=row.to_dict())
-            self.graph.add_node(product, type="Product")
-            self.graph.add_node(region, type="Region")
-            
-            # Add relationships
-            self.graph.add_edge(order_id, product, relationship="has_product")
-            self.graph.add_edge(order_id, region, relationship="sold_in")
-            self.graph.add_edge(product, order_id, relationship="ordered_in")
-            self.graph.add_edge(region, order_id, relationship="contains_order")
+            for _, row in df.iterrows():
+                order_id = row["Order_ID"]
+                product = row["Product"]
+                region = row["Region"]
+                
+                # Create nodes with properties
+                session.run(
+                    "MERGE (o:Order {order_id: $order_id}) "
+                    "SET o += $attributes",
+                    order_id=order_id, attributes=row.to_dict()
+                )
+                session.run(
+                    "MERGE (p:Product {name: $name})",
+                    name=product
+                )
+                session.run(
+                    "MERGE (r:Region {name: $name})",
+                    name=region
+                )
+                
+                # Create relationships
+                session.run(
+                    "MATCH (o:Order {order_id: $order_id}), (p:Product {name: $product}) "
+                    "MERGE (o)-[:HAS_PRODUCT]->(p)",
+                    order_id=order_id, product=product
+                )
+                session.run(
+                    "MATCH (o:Order {order_id: $order_id}), (r:Region {name: $region}) "
+                    "MERGE (o)-[:SOLD_IN]->(r)",
+                    order_id=order_id, region=region
+                )
         
-        print(f"Built knowledge graph with {self.graph.number_of_nodes()} nodes and {self.graph.number_of_edges()} edges")
+        print(f"Built Neo4j knowledge graph from {self.table_name}")
 
-    def _extract_relevant_subgraph(self, query):
-        """Extract relevant information from the graph based on the query."""
-        # Simple keyword-based extraction (can be enhanced with NLP)
-        query_lower = query.lower()
-        relevant_data = []
-        
-        for node in self.graph.nodes():
-            node_data = self.graph.nodes[node]
-            node_type = node_data.get("type", "")
-            
-            # Check if node matches query keywords
-            if (node.lower() in query_lower or 
-                (node_type == "Order" and any(col.lower() in query_lower for col in node_data.get("attributes", {})))):
-                # Get neighbors and relationships
-                for neighbor in self.graph.neighbors(node):
-                    edge_data = self.graph.get_edge_data(node, neighbor)
-                    attrs = self.graph.nodes[neighbor].get("attributes", {})
-                    if node_type == "Order":
-                        attrs = node_data["attributes"]
-                    relevant_data.append({
-                        "entity": node,
-                        "relationship": edge_data["relationship"],
-                        "related_entity": neighbor,
-                        "attributes": attrs
-                    })
-        
-        return relevant_data[:5]  # Limit to 5 entries for context brevity
+    def _execute_cypher(self, cypher_query):
+        """Execute the Cypher query and return results."""
+        try:
+            with self.driver.session() as session:
+                result = session.run(cypher_query)
+                return [dict(record) for record in result]
+        except Exception as e:
+            return {"error": str(e)}
 
     def query(self, user_query):
-        """Use knowledge graph to answer the user query."""
-        # Extract relevant subgraph data
-        graph_data = self._extract_relevant_subgraph(user_query)
-        
-        if not graph_data:
-            graph_data = [{"entity": "N/A", "relationship": "none", "related_entity": "N/A", "attributes": {}}]
-        
-        # Construct prompt for StructuredChat
-        prompt = (
-            f"Based on the following knowledge graph data from the {self.table_name} table:\n"
-            f"{json.dumps(graph_data, indent=2)}\n\n"
-            f"Provide an answer to this question: '{user_query}'"
+        """Convert user query to Cypher, execute it, and generate structured response."""
+        # Step 1: Convert user query to Cypher
+        cypher_prompt = (
+            f"Given a Neo4j knowledge graph with the following structure:\n"
+            f"- Nodes:\n"
+            f"  - Order (properties: order_id, Product, Region, Total_Amount, etc.)\n"
+            f"  - Product (property: name)\n"
+            f"  - Region (property: name)\n"
+            f"- Relationships:\n"
+            f"  - Order -[:HAS_PRODUCT]-> Product\n"
+            f"  - Order -[:SOLD_IN]-> Region\n"
+            f"Convert this natural language query into a valid Cypher query:\n"
+            f"'{user_query}'\n"
+            f"Return only the Cypher query in the JSON response."
         )
+        cypher_response = self.cypher_chat.send_message(cypher_prompt)
         
-        # Get structured response
-        response = self.chat.send_message(prompt)
-        return response
+        if not cypher_response or "cypher_query" not in cypher_response:
+            return {"error": "Failed to generate Cypher query", "details": cypher_response}
+        
+        cypher_query = cypher_response["cypher_query"]
+        
+        # Step 2: Execute the Cypher query
+        graph_data = self._execute_cypher(cypher_query)
+        
+        if isinstance(graph_data, dict) and "error" in graph_data:
+            return {"error": "Cypher execution failed", "details": graph_data["error"], "cypher_query": cypher_query}
+        
+        # Step 3: Generate final response
+        response_prompt = (
+            f"Based on the following Cypher query and its results from the {self.table_name} knowledge graph:\n"
+            f"Cypher Query: {cypher_query}\n"
+            f"Results: {json.dumps(graph_data, indent=2)}\n\n"
+            f"Provide an answer to the user's original question: '{user_query}'"
+        )
+        final_response = self.response_chat.send_message(response_prompt)
+        
+        return final_response
+
+    def __del__(self):
+        """Close the Neo4j driver when the object is destroyed."""
+        self.driver.close()
 
 def main():
-    # Initialize KnowledgeGraphSystem
-    kg = KnowledgeGraphSystem(DB_PATH, TABLE_NAME)
+    # Initialize Neo4jKnowledgeGraphSystem
+    kg = Neo4jKnowledgeGraphSystem(DB_PATH, TABLE_NAME, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
     
     # Example queries
     queries = [
-        "What’s the average total amount for mouse?",
+        "What’s the average total amount for Mouse?",
         "Which product has the highest total amount?",
         "Summarize sales in the North region."
     ]
