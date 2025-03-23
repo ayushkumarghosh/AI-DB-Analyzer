@@ -7,9 +7,9 @@ import json
 # Configuration
 DB_PATH = "my_database.db"
 TABLE_NAME = "sample_sales_data"
-NEO4J_URI = "bolt://localhost:7474"  # Default Neo4j URI
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "neo4j"  
+NEO4J_URI = "bolt://localhost:7687"  # Default Neo4j URI
+NEO4J_USER = "admin"
+NEO4J_PASSWORD = "mvemjsun"  
 
 # JSON schema for Cypher query generation
 cypher_schema = {
