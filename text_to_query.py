@@ -142,9 +142,11 @@ def main():
     t2q = TextToQuery(DB_PATH, TABLE_NAME)
     
     queries = [
-        "What’s the average total amount for Mouse?",
-        "Which product has the highest total amount?",
-        "Summarize sales in the North region."
+        "What are the orders with the highest and lowest total amounts after applying the maximum and minimum discounts?", #Tests handling of the Discount_Percentage constraint (0-100), the Total_Amount calculation, and extreme values.
+        "Show all pending orders in the North region where shipping cost exceeds 50 dollars, sorted by total amount descending.", #Tests multi-condition filtering (Order_Status, Region, Shipping_Cost), sorting, and natural language understanding of thresholds.
+        "What’s the average unit price for each product category, excluding orders with zero discount?", #Tests aggregation (AVG), grouping (Category), and exclusion based on a condition (Discount_Percentage).
+        "Which completed orders from the last 30 days have a total amount greater than 1000 dollars?", #Tests date arithmetic (relative to current date, March 23, 2025), filtering on Order_Status and Total_Amount, and natural language date interpretation.
+        "Find orders where the discount reduces the total unit price cost to less than the shipping cost." #Tests understanding of the Total_Amount formula, comparing its components (Unit_Price * Quantity * (1 - Discount_Percentage/100) vs. Shipping_Cost), and edge case arithmetic.
     ]
     
     for query in queries:
