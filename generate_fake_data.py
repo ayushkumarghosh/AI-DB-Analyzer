@@ -5,7 +5,7 @@ import random
 from datetime import datetime, timedelta
 import os
 
-def generate_sample_sales_data(output_file="data/sample_sales_data.csv", num_rows=10000):
+def generate_sample_sales_data(output_file="data/sample_sales_data.csv", num_rows=1000):
     """
     Generate sample sales data and save it to a CSV file
     
