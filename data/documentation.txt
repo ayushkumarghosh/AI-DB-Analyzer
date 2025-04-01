@@ -1,0 +1,33 @@
+Overview:The sample_sales_data table stores sales transaction records for various products. It contains customer information, product details, pricing, and order status data.
+
+Column Descriptions
+Column Name	Data Type	Constraints	Description
+Order_ID	VARCHAR(10)	PRIMARY KEY	Unique identifier for each order (e.g., "ORD-000001")
+Customer_Name	VARCHAR(100)	NOT NULL	Full name of the customer placing the order
+Customer_Email	VARCHAR(100)	NOT NULL	Customer's email address
+Product	VARCHAR(50)	NOT NULL	Name of the purchased product (e.g., "Laptop", "Smartphone")
+Category	VARCHAR(50)	NOT NULL	Product category (e.g., "Electronics", "Accessories")
+Unit_Price	DECIMAL(10,2)	NOT NULL	Price per unit in dollars (up to 9999999.99)
+Quantity	INTEGER	NOT NULL, CHECK (Quantity > 0)	Number of units ordered (must be positive)
+Order_Date	DATE	NOT NULL	Date the order was placed (YYYY-MM-DD format)
+Region	VARCHAR(50)	NOT NULL	Geographic region of the sale (e.g., "North", "West")
+Shipping_Cost	DECIMAL(10,2)	NOT NULL	Cost of shipping in dollars (up to 9999999.99)
+Payment_Method	VARCHAR(20)	NOT NULL	Payment type (e.g., "Credit Card", "Bank Transfer")
+Order_Status	VARCHAR(20)	NOT NULL	Current status of the order (e.g., "Completed", "Pending")
+Discount_Percentage	INTEGER	NOT NULL, CHECK (0-100)	Discount applied to the order (0-100%)
+Total_Amount	DECIMAL(10,2)	NOT NULL	Total order value including discount and shipping
+Calculated Fields
+Total_Amount is calculated as:
+(Unit_Price * Quantity * (1 - Discount_Percentage/100) + Shipping_Cost)
+Rounded to 2 decimal places
+Constraints
+Primary Key: Order_ID ensures each order has a unique identifier
+Not Null: All fields are required
+Quantity: Must be greater than 0
+Discount_Percentage: Must be between 0 and 100 (inclusive)
+
+Usage Notes
+The table is designed for storing sales transactions and analyzing sales patterns
+All monetary values are stored with 2 decimal places
+Order_ID follows the format "ORD-######" where ###### is a zero-padded number
+Date values are stored in ISO format (YYYY-MM-DD)

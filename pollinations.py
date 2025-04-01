@@ -3,7 +3,7 @@ import json
 import tiktoken
 
 MODEL = "openai-large"
-MAX_TOKENS = 4096
+MAX_TOKENS = 16384
 MAX_CONTEXT_TOKENS = 15000
 TEMPERATURE = 0
 
