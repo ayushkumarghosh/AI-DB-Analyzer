@@ -235,13 +235,13 @@ def main():
         "What’s the average unit price for each product category, excluding orders with zero discount?", #Tests aggregation (AVG), grouping (Category), and exclusion based on a condition (Discount_Percentage).
         "Which completed orders from the last 30 days have a total amount greater than 1000 dollars?", #Tests date arithmetic (relative to current date, March 23, 2025), filtering on Order_Status and Total_Amount, and natural language date interpretation.
         "Find orders where the discount reduces the total unit price cost to less than the shipping cost.", #Tests understanding of the Total_Amount formula, comparing its components (Unit_Price * Quantity * (1 - Discount_Percentage/100) vs. Shipping_Cost), and edge case arithmetic.,
-        "what would be my best marketing strategy?" #Trying a generic query
     ]
     
-    for query in queries:
-        print(f"\nQuery: {query}")
-        response = t2q.query(query)
-        print("Response:", json.dumps(response, indent=2))
+    with open("output.txt", "w") as output_file:
+        for query in queries:
+            response = t2q.query(query)
+            output_file.write(f"Query: {query}\n")
+            output_file.write(f"Response: {json.dumps(response, indent=2)}\n\n")
 
 if __name__ == "__main__":
     main()
