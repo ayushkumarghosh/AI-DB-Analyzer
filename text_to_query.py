@@ -3,6 +3,7 @@ import json
 from pollinations import StructuredChat
 import chromadb
 from chromadb.utils import embedding_functions
+import os
 
 # Configuration
 DB_PATH = "my_database.db"
@@ -10,26 +11,6 @@ TABLE_NAME = "sample_sales_data"
 VECTOR_DB_PATH = "chroma_db"
 COLLECTION_NAME = "docs_collection"
 MAX_VALIDATION_ATTEMPTS = 3  # Limit retries to avoid infinite loops
-
-# JSON schema for SQL query generation
-sql_schema = {
-    "type": "object",
-    "properties": {
-        "sql_query": {"type": "string"}
-    },
-    "required": ["sql_query"]
-}
-
-# JSON schema for SQL validation/correction
-sql_validation_schema = {
-    "type": "object",
-    "properties": {
-        "is_valid": {"type": "boolean"},
-        "corrected_sql_query": {"type": "string"},
-        "reason": {"type": "string"}
-    },
-    "required": ["is_valid", "corrected_sql_query", "reason"]
-}
 
 # JSON schema for Python code generation
 python_code_schema = {
@@ -80,8 +61,6 @@ class TextToQuery:
     def __init__(self, db_path, table_name, vector_db_path=VECTOR_DB_PATH):
         self.db_path = db_path
         self.table_name = table_name
-        self.sql_chat = StructuredChat(json_schema=sql_schema)
-        self.sql_validator = StructuredChat(json_schema=sql_validation_schema)
         self.response_chat = StructuredChat(json_schema=response_schema)
         self.code_generator = StructuredChat(json_schema=python_code_schema)
         
@@ -103,6 +82,17 @@ class TextToQuery:
     #         schema_desc += f"- {col[1]} ({col[2]})\n"
     #     return schema_desc
 
+    def _fetch_relevant_chunks(self, query, n_results=3):
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=n_results
+            )
+            return results['documents'][0] if results['documents'] else []
+        except Exception as e:
+            print(f"Error fetching from vector DB: {str(e)}")
+            return []
+
     def _execute_sql(self, sql_query):
         try:
             conn = sqlite3.connect(self.db_path)
@@ -115,105 +105,101 @@ class TextToQuery:
         except Exception as e:
             return {"error": str(e)}
 
-    def _fetch_relevant_chunks(self, query, n_results=3):
-        try:
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=n_results
-            )
-            return results['documents'][0] if results['documents'] else []
-        except Exception as e:
-            print(f"Error fetching from vector DB: {str(e)}")
-            return []
-
-    def _validate_and_correct_sql(self, sql_query, user_query, context, previous_attempts=""):
-        validation_prompt = (
-            # f"Given the following table schema:\n"
-            # f"{self.table_schema}\n"
-            f"Given the following details:\n"
-            f"{context}\n"
-            f"Original user query: '{user_query}'\n"
-            f"Generated SQL query to validate: '{sql_query}'\n"
-            f"Previous validation attempts (if any): {previous_attempts}\n\n"
-            f"Validate this SQL query for SQLite syntax correctness and intent alignment:\n"
-            f"- Ensure it follows SQLite rules: e.g., ORDER BY and LIMIT in UNION ALL must be within subqueries or after the entire UNION ALL.\n"
-            f"- Check for errors like misplaced clauses, incorrect aggregation, or syntax issues.\n"
-            f"- If invalid, provide a corrected query that achieves the same intent as '{user_query}'.\n"
-            f"- Return a JSON object with 'is_valid' (boolean), 'corrected_sql_query' (string), and 'reason' (string explanation).\n"
-            f"Example correction for UNION ALL with ORDER BY:\n"
-            f"  Invalid: SELECT ... ORDER BY ... LIMIT 1 UNION ALL SELECT ... ORDER BY ... LIMIT 1\n"
-            f"  Valid: SELECT * FROM (SELECT ... ORDER BY ... LIMIT 1) UNION ALL SELECT * FROM (SELECT ... ORDER BY ... LIMIT 1)"
-        )
-        validation_response = self.sql_validator.send_message(validation_prompt)
-        
-        return validation_response
-
     def _execute_code_safely(self, code, user_query, context, sql_query, relevant_chunks):
         # Create a local scope for execution with necessary context
         local_vars = {
             "db_path": self.db_path,
             "user_query": user_query,
             "context": context,
-            "sql_query": sql_query,
             "relevant_chunks": relevant_chunks,
             "sqlite3": sqlite3,
             "json": json
         }
         
         try:
+            # Validate database path
+            if not self.db_path or not isinstance(self.db_path, (str, bytes)):
+                return {
+                    "error": "Invalid database path",
+                    "sql_query": "",
+                    "query_result": [],
+                    "validation_history": [user_query]
+                }
+                
             exec(code, {}, local_vars)
+            
             if "result" in local_vars:
-                return local_vars["result"]
+                result = local_vars["result"]
+                # Ensure result is JSON serializable
+                try:
+                    # Test serialization
+                    json.dumps(result)
+                    return result
+                except (TypeError, ValueError) as json_err:
+                    return {
+                        "error": f"Result is not JSON serializable: {str(json_err)}",
+                        "sql_query": result.get("sql_query", ""),
+                        "query_result": [],
+                        "validation_history": [user_query]
+                    }
             else:
-                return {"error": "Generated code did not produce a 'result' variable"}
+                return {
+                    "error": "Generated code did not produce a 'result' variable",
+                    "sql_query": "",
+                    "query_result": [],
+                    "validation_history": [user_query]
+                }
         except Exception as e:
-            return {"error": f"Error executing generated code: {str(e)}"}
+            return {
+                "error": f"Error executing generated code: {str(e)}",
+                "sql_query": "",
+                "query_result": [],
+                "validation_history": [user_query]
+            }
 
     def query(self, user_query):
+        # Validate database path first
+        if not self.db_path or not isinstance(self.db_path, (str, bytes)):
+            return {
+                "error": "Invalid database path",
+                "sql_query": "",
+                "query_result": [],
+                "validation_history": [user_query]
+            }
+            
+        # Check if database file exists
+        if not os.path.exists(self.db_path):
+            return {
+                "error": f"Database file not found: {self.db_path}",
+                "sql_query": "",
+                "query_result": [],
+                "validation_history": [user_query]
+            }
+            
         relevant_chunks = self._fetch_relevant_chunks(user_query)
         context = "\nRelevant Documentation Chunks:\n" + "\n".join(relevant_chunks) if relevant_chunks else ""
 
-        # Step 1: Generate initial SQL query
-        sql_prompt = (
-            # f"Given the following table schema:\n"
-            # f"{self.table_schema}\n"
-            f"Given the following details:\n"
-            f"{context}\n"
-            f"Convert this natural language query into a valid SQL query for SQLite:\n"
-            f"'{user_query}'\n"
-            f"Rules:\n"
-            f"- For queries asking for extremes (e.g., highest/lowest), use subqueries or CTEs if combining results with UNION ALL.\n"
-            f"- Place ORDER BY and LIMIT after UNION ALL only if sorting the combined result; otherwise, wrap individual SELECTs in subqueries.\n"
-            f"- Ensure the query is syntactically correct for SQLite.\n"
-            f"Return only the SQL query in the JSON response."
-        )
-        sql_response = self.sql_chat.send_message(sql_prompt)
-        
-        if not sql_response or "sql_query" not in sql_response:
-            return {"error": "Failed to generate SQL query", "details": sql_response}
-        
-        # Get the initial SQL query
-        initial_sql_query = sql_response["sql_query"]
-        
-        # Step 2: Generate Python code that executes and formats the SQL query results
+        # Generate Python code that creates and executes SQL query
         code_prompt = (
-            f"Based on the user query '{user_query}' and the generated SQL query below, create Python code that:\n"
-            f"1. Executes the SQL query against an SQLite database\n"
-            f"2. Formats the results based on the query type (e.g., text answer, table data, or visualization)\n"
-            f"3. Returns a structured JSON response\n\n"
-            f"SQL Query: {initial_sql_query}\n\n"
+            f"Based on the user query '{user_query}', create Python code that:\n"
+            f"1. Generates an appropriate SQL query for SQLite based on the user's intent\n"
+            f"2. Executes the SQL query against an SQLite database\n"
+            f"3. Formats the results based on the query type (e.g., text answer, table data, or visualization)\n"
+            f"4. Returns a structured JSON response\n\n"
             f"Additional Context: {context}\n\n"
             f"Use these variables that will be available in the execution environment:\n"
-            f"- db_path: Path to the SQLite database\n"
+            f"- db_path: Path to the SQLite database (validate this is not None before using)\n"
             f"- user_query: The original user query\n"
             f"- context: Relevant documentation chunks\n"
-            f"- sql_query: The SQL query to execute\n"
             f"- relevant_chunks: List of relevant document chunks\n"
             f"- sqlite3: The sqlite3 module\n"
             f"- json: The json module\n\n"
             f"The code should:\n"
+            f"- Validate db_path exists and is not None\n"
+            f"- Create a valid SQL query based on the user's request\n"
             f"- Connect to the database at db_path\n"
             f"- Execute the SQL query\n"
+            f"- Handle any SQLite errors with try-except blocks\n"
             f"- Analyze the query intent and results to determine the appropriate response format:\n"
             f"  * Text answer for simple facts or explanations\n"
             f"  * Table data (columns and rows) for detailed records\n"
@@ -222,26 +208,35 @@ class TextToQuery:
             f"  * 'answer': String with text response (if applicable)\n"
             f"  * 'table_data': Object with 'columns' and 'rows' (if applicable)\n"
             f"  * 'graph_data': Object with 'type', 'labels', 'values', 'title' (if applicable)\n"
-            f"  * 'sql_query': The executed SQL query\n"
-            f"  * 'query_result': Raw query results\n"
+            f"  * 'sql_query': The generated and executed SQL query\n"
+            f"  * 'query_result': Raw query results (ensure this is JSON serializable)\n"
             f"  * 'validation_history': List with the original query\n"
             f"  * 'relevant_chunks': The documentation chunks used\n\n"
+            f"Ensure the SQL query follows SQLite syntax rules (e.g., ORDER BY and LIMIT in UNION ALL must be within subqueries or after the entire UNION ALL).\n"
+            f"For queries asking for extremes (highest/lowest), use appropriate subqueries or CTEs if combining results.\n"
+            f"Ensure all objects in the result are properly JSON serializable (no complex objects).\n"
             f"Ensure the code is self-contained and handles errors gracefully."
         )
         
         code_response = self.code_generator.send_message(code_prompt)
         
         if not code_response or "python_code" not in code_response:
-            return {"error": "Failed to generate Python code", "details": code_response}
+            return {
+                "error": "Failed to generate Python code", 
+                "details": code_response,
+                "sql_query": "",
+                "query_result": [],
+                "validation_history": [user_query]
+            }
         
         generated_code = code_response["python_code"]
         
-        # Step 3: Execute the generated Python code
+        # Execute the generated Python code
         result = self._execute_code_safely(
             generated_code, 
             user_query, 
             context, 
-            initial_sql_query, 
+            "", # Passing empty string for sql_query since it's now generated in the code
             relevant_chunks
         )
         
