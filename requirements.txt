@@ -25,3 +25,5 @@ tqdm==4.67.1
 typing_extensions==4.12.2
 tzdata==2025.1
 urllib3==2.3.0
+chromadb==1.0.12
+sentence-transformers==4.1.0
