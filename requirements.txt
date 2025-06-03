@@ -27,3 +27,5 @@ tzdata==2025.1
 urllib3==2.3.0
 chromadb==1.0.12
 sentence-transformers==4.1.0
+streamlit==1.45.0
+plotly==6.1.2

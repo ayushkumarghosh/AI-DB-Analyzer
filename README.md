@@ -1,46 +1,65 @@
-# AI-DB-Analyzer
+# AI Database Analyzer
 
-AI-DB-Analyzer is a Python project designed to:
-- Upload CSV data into a SQLite database.
-- Create a vector database using documentation files.
-- Generate and validate SQL queries based on natural language input.
-- Return structured responses including query results, explanations, and visual data suggestions.
+An interactive Streamlit application that allows you to query your database using natural language.
 
-## Project Components
+## Features
 
-### Data Upload
-- **File:** [data_upload.py](data_upload.py)
-- **Functionality:** 
-  - Loads CSV files from the `data/` folder into the SQLite database (`my_database.db`).
-  - Normalizes CSV column names (replacing spaces, dots, and dashes).
-  - Loads documentation files (`documentation.txt` and `db_schema.sql`) into a Chroma vector database for later reference using simple chunking.
+- Natural language query translation to SQL
+- Interactive Streamlit UI
+- Multiple output formats:
+  - Text answers
+  - Data tables
+  - Visualizations (bar charts, line charts, pie charts)
+- Contextual retrieval using ChromaDB
+- Example queries to get started
 
-### Text to SQL Query
-- **File:** [text_to_query.py](text_to_query.py)
-- **Functionality:**
-  - Uses natural language queries to generate corresponding SQL queries.
-  - Incorporates context retrieved from the vector database (created via documentation) to better understand user queries.
-  - Validates and corrects generated SQL queries in a loop until they execute correctly on the SQLite database.
-  - Provides a structured response (text answer, table data, graph data) by leveraging a structured chat model.
+## Installation
 
-### Structured Chat & Query Generation
-- **File:** [pollinations.py](pollinations.py)
-- **Functionality:**
-  - Contains the `StructuredChat` class that integrates with an OpenAI endpoint to generate JSON responses.
-  - Main utility for converting natural language prompts into SQL queries and for generating structured response messages.
+1. Clone this repository
+2. Install the required dependencies:
 
-## Setup & Installation
+```bash
+pip install -r requirements.txt
+```
 
-1. **Clone the Repository**
+3. Make sure you have the necessary database files:
+   - `my_database.db` - SQLite database with sample data
+   - `chroma_db` - Vector database for contextual retrieval
 
-2. **Install Requirements**
-    ```pip install -r requirements.txt```
+## Usage
 
-3. **Generate fake data**
-    ```python generate_fake_data.py```
+1. Run the Streamlit application:
 
-4. **Run Data Upload**
-    ```python data_upload.py```
+```bash
+streamlit run app.py
+```
 
-5. **Generate Query Output**
-    ```python text_to_query.py```
+2. Enter your natural language query in the text area
+3. Click "Analyze" to process your query
+4. View the results in the appropriate format (text, table, or visualization)
+
+## Example Queries
+
+- What are the orders with the highest and lowest total amounts after applying the highest discount?
+- Show all pending orders in the North region where shipping cost exceeds 30 dollars.
+- What's the average unit price for each product category, excluding orders with zero discount?
+- Which completed orders from the last 30 days have a total amount greater than 1000 dollars?
+- Find orders where the discount reduces the total unit price cost to less than the shipping cost.
+
+## Architecture
+
+The application consists of:
+
+1. `text_to_query.py` - Core logic for converting text to SQL queries
+2. `app.py` - Streamlit UI
+3. SQLite database (`my_database.db`)
+4. ChromaDB vector database for context retrieval
+
+## Requirements
+
+- Python 3.8+
+- Streamlit
+- Pandas
+- Plotly
+- ChromaDB
+- Pollinations library
