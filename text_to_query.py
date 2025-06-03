@@ -31,6 +31,15 @@ sql_validation_schema = {
     "required": ["is_valid", "corrected_sql_query", "reason"]
 }
 
+# JSON schema for Python code generation
+python_code_schema = {
+    "type": "object",
+    "properties": {
+        "python_code": {"type": "string"}
+    },
+    "required": ["python_code"]
+}
+
 # Response schema
 response_schema = {
     "type": "object",
@@ -74,6 +83,7 @@ class TextToQuery:
         self.sql_chat = StructuredChat(json_schema=sql_schema)
         self.sql_validator = StructuredChat(json_schema=sql_validation_schema)
         self.response_chat = StructuredChat(json_schema=response_schema)
+        self.code_generator = StructuredChat(json_schema=python_code_schema)
         
         # self.table_schema = self._get_table_schema()
         
@@ -138,6 +148,27 @@ class TextToQuery:
         
         return validation_response
 
+    def _execute_code_safely(self, code, user_query, context, sql_query, relevant_chunks):
+        # Create a local scope for execution with necessary context
+        local_vars = {
+            "db_path": self.db_path,
+            "user_query": user_query,
+            "context": context,
+            "sql_query": sql_query,
+            "relevant_chunks": relevant_chunks,
+            "sqlite3": sqlite3,
+            "json": json
+        }
+        
+        try:
+            exec(code, {}, local_vars)
+            if "result" in local_vars:
+                return local_vars["result"]
+            else:
+                return {"error": "Generated code did not produce a 'result' variable"}
+        except Exception as e:
+            return {"error": f"Error executing generated code: {str(e)}"}
+
     def query(self, user_query):
         relevant_chunks = self._fetch_relevant_chunks(user_query)
         context = "\nRelevant Documentation Chunks:\n" + "\n".join(relevant_chunks) if relevant_chunks else ""
@@ -161,67 +192,60 @@ class TextToQuery:
         if not sql_response or "sql_query" not in sql_response:
             return {"error": "Failed to generate SQL query", "details": sql_response}
         
-        current_sql_query = sql_response["sql_query"]
-        validation_history = [f"Initial query: {current_sql_query}"]
-
-        # Step 2: Continuous validation loop
-        for attempt in range(MAX_VALIDATION_ATTEMPTS):
-            # Validate the current query
-            validation_result = self._validate_and_correct_sql(
-                current_sql_query, user_query, context, 
-                previous_attempts="\n".join(validation_history)
-            )
-            
-            if not validation_result or "is_valid" not in validation_result:
-                return {"error": "Failed to validate SQL query", "details": validation_result}
-            
-            is_valid = validation_result["is_valid"]
-            current_sql_query = validation_result["corrected_sql_query"]
-            reason = validation_result["reason"]
-            validation_history.append(f"Attempt {attempt + 1}: {reason} - Query: {current_sql_query}")
-
-            # Try executing the query
-            query_result = self._execute_sql(current_sql_query)
-            
-            if not isinstance(query_result, dict) or "error" not in query_result:
-                # Success! Query executed without error
-                break
-            else:
-                # Query failed, log the error and continue validation
-                validation_history.append(f"Execution failed: {query_result['error']}")
-
-        else:
-            # Max attempts reached, return the last error
-            return {
-                "error": "SQL execution failed after maximum validation attempts",
-                "details": query_result["error"],
-                "sql_query": current_sql_query,
-                "validation_history": validation_history
-            }
-
-        # Step 3: Generate multi-type response
-        response_prompt = (
-            f"Based on the following SQL query and its results from the {self.table_name} table:\n"
-            f"SQL Query: {current_sql_query}\n"
-            f"Results: {json.dumps(query_result, indent=2)}\n"
-            f"Additional Context from Documentation:\n{context}\n"
-            f"Validation History: {json.dumps(validation_history, indent=2)}\n\n"
-            f"Provide a response to the user's original question: '{user_query}'\n"
-            f"Determine the best response format(s) based on the query's intent and data:\n"
-            f"- Use 'answer' for a concise textual summary if the query asks for a simple fact or explanation.\n"
-            f"- Use 'table_data' (with 'columns' and 'rows') if the query requests detailed records or a list.\n"
-            f"- Use 'graph_data' (with 'type', 'labels', 'values', 'title') if the query involves trends, comparisons, or aggregations suitable for visualization.\n"
-            f"A single response can include multiple types (e.g., 'answer' and 'table_data', or all three).\n"
-            f"Always include 'sql_query', 'query_result', 'relevant_chunks', and 'validation_history'."
+        # Get the initial SQL query
+        initial_sql_query = sql_response["sql_query"]
+        
+        # Step 2: Generate Python code that executes and formats the SQL query results
+        code_prompt = (
+            f"Based on the user query '{user_query}' and the generated SQL query below, create Python code that:\n"
+            f"1. Executes the SQL query against an SQLite database\n"
+            f"2. Formats the results based on the query type (e.g., text answer, table data, or visualization)\n"
+            f"3. Returns a structured JSON response\n\n"
+            f"SQL Query: {initial_sql_query}\n\n"
+            f"Additional Context: {context}\n\n"
+            f"Use these variables that will be available in the execution environment:\n"
+            f"- db_path: Path to the SQLite database\n"
+            f"- user_query: The original user query\n"
+            f"- context: Relevant documentation chunks\n"
+            f"- sql_query: The SQL query to execute\n"
+            f"- relevant_chunks: List of relevant document chunks\n"
+            f"- sqlite3: The sqlite3 module\n"
+            f"- json: The json module\n\n"
+            f"The code should:\n"
+            f"- Connect to the database at db_path\n"
+            f"- Execute the SQL query\n"
+            f"- Analyze the query intent and results to determine the appropriate response format:\n"
+            f"  * Text answer for simple facts or explanations\n"
+            f"  * Table data (columns and rows) for detailed records\n"
+            f"  * Graph data (bar, line, or pie) for trends or comparisons\n"
+            f"- Return a JSON object as a variable named 'result' with these fields:\n"
+            f"  * 'answer': String with text response (if applicable)\n"
+            f"  * 'table_data': Object with 'columns' and 'rows' (if applicable)\n"
+            f"  * 'graph_data': Object with 'type', 'labels', 'values', 'title' (if applicable)\n"
+            f"  * 'sql_query': The executed SQL query\n"
+            f"  * 'query_result': Raw query results\n"
+            f"  * 'validation_history': List with the original query\n"
+            f"  * 'relevant_chunks': The documentation chunks used\n\n"
+            f"Ensure the code is self-contained and handles errors gracefully."
         )
-        final_response = self.response_chat.send_message(response_prompt)
         
-        if "relevant_chunks" not in final_response:
-            final_response["relevant_chunks"] = relevant_chunks
-        if "validation_history" not in final_response:
-            final_response["validation_history"] = validation_history
+        code_response = self.code_generator.send_message(code_prompt)
         
-        return final_response
+        if not code_response or "python_code" not in code_response:
+            return {"error": "Failed to generate Python code", "details": code_response}
+        
+        generated_code = code_response["python_code"]
+        
+        # Step 3: Execute the generated Python code
+        result = self._execute_code_safely(
+            generated_code, 
+            user_query, 
+            context, 
+            initial_sql_query, 
+            relevant_chunks
+        )
+        
+        return result
     
 def main():
     t2q = TextToQuery(DB_PATH, TABLE_NAME)
@@ -229,7 +253,7 @@ def main():
     queries = [
         "What are the orders with the highest and lowest total amounts after applying the highest discount?", #Tests handling of the Discount_Percentage constraint (0-100), the Total_Amount calculation, and extreme values.
         "Show all pending orders in the North region where shipping cost exceeds 30 dollars, sorted by total amount descending.", #Tests multi-condition filtering (Order_Status, Region, Shipping_Cost), sorting, and natural language understanding of thresholds.
-        "What’s the average unit price for each product category, excluding orders with zero discount?", #Tests aggregation (AVG), grouping (Category), and exclusion based on a condition (Discount_Percentage).
+        "What's the average unit price for each product category, excluding orders with zero discount?", #Tests aggregation (AVG), grouping (Category), and exclusion based on a condition (Discount_Percentage).
         "Which completed orders from the last 30 days have a total amount greater than 1000 dollars?", #Tests date arithmetic (relative to current date, March 23, 2025), filtering on Order_Status and Total_Amount, and natural language date interpretation.
         "Find orders where the discount reduces the total unit price cost to less than the shipping cost.", #Tests understanding of the Total_Amount formula, comparing its components (Unit_Price * Quantity * (1 - Discount_Percentage/100) vs. Shipping_Cost), and edge case arithmetic.,
     ]
