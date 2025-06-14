@@ -23,8 +23,7 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 # Header
-st.title("AI Database Analyzer")
-st.markdown("Ask questions about your database in natural language")
+st.header("AI Database Analyzer")
 
 # Chat container for displaying conversation history
 chat_container = st.container()
@@ -194,7 +193,3 @@ with st.sidebar:
     if st.button("Clear Chat History"):
         st.session_state.chat_history = []
         st.rerun()
-
-# Footer
-st.markdown("---")
-st.markdown("AI Database Analyzer - Powered by ChromaDB and LLMs") 
